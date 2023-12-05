@@ -37,7 +37,7 @@ Vector write style:
     buffers_to_iov
 
         convert the *buffer into iovec.
-    
+
     FileWriteV
         pwritev
 
@@ -48,5 +48,39 @@ Vector write style:
                     void  *iov_base;    /* Starting address */
                     size_t iov_len;     /* Number of bytes to transfer */
                 };
+
+# buffer
+
+Principal entry points:
+
+ReadBuffer() -- find or create a buffer holding the requested page, and pin it
+so that no one can destroy it while this process is using it.
+
+ReleaseBuffer() -- unpin a buffer
+
+MarkBufferDirty() -- mark a pinned buffer's contents as "dirty". The disk write
+is delayed until buffer replacement or checkpoint.
+
+See also these files:
+		freelist.c -- chooses victim for buffer replacement
+		buf_table.c -- manages the buffer lookup table
+
+
+# smgrprefetch
+
+FilePrefetch -> posix_fadvise
+
+Programs can use posix_fadvise() to announce an intention to access file data
+in a specific pattern in the future, thus allowing the kernel to perform
+appropriate optimiza‐ tions.
+
+posix_fadvise - POSIX_FADV_WILLNEED
+
+The specified data will be accessed in the near future. POSIX_FADV_WILLNEED
+initiates a nonblocking read of the specified region into the page cache.  The
+amount of data read may be decreased by thekernel depending on  vir‐tual memory
+load.  (A few megabytes will usually be fully satisfied, and more is rarely
+useful.)
+
 
 
