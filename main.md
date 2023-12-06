@@ -84,3 +84,17 @@ useful.)
 
 
 
+# WAL prefetch
+
+lrq_prefetch -> XLogPrefetcherNextBlock
+
+Returns LRQ_NEXT_AGAIN if no more WAL data is available yet.
+
+Returns LRQ_NEXT_IO if the next block reference is for a main fork block that
+isn't in the buffer pool, and the kernel has been asked to start reading it to
+make a future read system call faster. An LSN is written to *lsn, and the I/O
+will be considered to have completed once that LSN is replayed.
+
+Returns LRQ_NEXT_NO_IO if we examined the next block reference and found that
+it was already in the buffer pool, or we decided for various reasons not to
+prefetch.
