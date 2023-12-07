@@ -98,3 +98,11 @@ will be considered to have completed once that LSN is replayed.
 Returns LRQ_NEXT_NO_IO if we examined the next block reference and found that
 it was already in the buffer pool, or we decided for various reasons not to
 prefetch.
+
+The basic logic is that: it will try to search the block in the buffer, if
+exists, then don't need to prefetch, if not, call smgrprefetch to ask Kernel to
+prefetch the data so that the next read will be faster.
+
+i.e
+ - Cache hit, nothing to do.
+ - Cache miss, I/O (presumably) started.
