@@ -106,3 +106,20 @@ prefetch the data so that the next read will be faster.
 i.e
  - Cache hit, nothing to do.
  - Cache miss, I/O (presumably) started.
+
+
+---
+
+XLogReadBufferForRedoExtended
+XLogReadBufferForRedo
+
+Reads a block referenced by a WAL record into shared buffer cache, and
+determines what needs to be done to redo the changes to it.
+
+---
+
+PrefetchBuffer().
+
+This is named by analogy to ReadBuffer but doesn't actually allocate a buffer.
+Instead it tries to ensure that a future ReadBuffer for the given block will
+not be delayed by the I/O.  Prefetching is optional.
