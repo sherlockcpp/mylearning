@@ -123,3 +123,167 @@ PrefetchBuffer().
 This is named by analogy to ReadBuffer but doesn't actually allocate a buffer.
 Instead it tries to ensure that a future ReadBuffer for the given block will
 not be delayed by the I/O.  Prefetching is optional.
+
+Note: Prefetch will look for the buffer while not pin it.
+
+
+# Buffer
+
+BufferDescPadded BufferDescriptors[... ]
+
+GetBufferDescriptor will get the buffdesc from the BufferDescriptors.
+Note that LockBufHdr the bufferdesc.
+
+Normal process of reading a buffer (Usage:
+heapam_scan_sample_next_block/heapgettup_pagemode/heapgettup):
+
+a) Allocate the buffer
+
+  1. If the buffer is in the buffer pool already, then return.
+  
+            LWLockAcquire(newPartitionLock, LW_SHARED);
+            existing_buf_id = BufTableLookup(&newTag, newHash);
+                valid = PinBuffer(buf, strategy);
+
+  2. If not exists, get a new buffer.
+  
+      GetVictimBuffer
+          StrategyGetBuffer
+  
+          2.1. return if buffer is available in ring buffer
+  
+          2.2. it will notify the bgwriter.
+          and then try to get a buffer from freelist StrategyControl->firstFreeBuffer and add it to the ring buffer.
+
+  3. Nothing on the freelist, so run the "clock sweep" algorithm.
+
+a.2) after getting the buffer, pin (buf_state += BUF_REFCOUNT_ONE; ...) and
+unlock the buffer.
+
+a.3) If the buffer was dirty(buf_state & BM_DIRTY), try to write it out.
+
+    FlushBuffer
+    ScheduleBufferTagForWriteback
+
+b) Set necessary bits for the buffer.
+
+    victim_buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
+    StartBufferIO
+        buf_state |= BM_IO_IN_PROGRESS;
+
+c) read data from disk and write it into the buffer
+
+    #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
+    bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
+
+    smgrread(smgr, forkNum, blockNum, bufBlock);
+
+        1. get the target segment.
+        v = _mdfd_getseg(reln, forknum, blocknum, false,
+				 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+            1.1. if an existing and opened segment, we're done
+                targetseg = blkno / ((BlockNumber) RELSEG_SIZE);
+                v = &reln->md_seg_fds[forknum][targetseg];
+                return v
+
+            1.2 open the fork if not yet.
+                v = mdopenfork(reln, forknum, behavior);
+
+            1.2. The target segment is not yet open. Iterate over all the segments
+            between the last opened and the target segment.
+
+                for (nextsegno = reln->md_num_open_segs[forknum];
+                nextsegno <= targetseg; nextsegno++)
+                    v = _mdfd_openseg(reln, forknum, nextsegno, flags);
+
+        2. read data FileRead
+
+
+The process of extending buffers:
+
+a) Acquire victim buffers for extension without holding extension lock.
+
+    for (uint32 i = 0; i < extend_by; i++)
+        buffers[i] = GetVictimBuffer(strategy, io_context);
+        buf_block = BufHdrGetBlock(GetBufferDescriptor(buffers[i] - 1));
+
+b) Insert all the buffer into Buf hash
+
+    for (uint32 i = 0; i < extend_by; i++)
+        existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
+
+c) smgrzeroextend
+
+d) Set BM_VALID, terminate IO, and wake up any waiters
+
+    for (uint32 i = 0; i < extend_by; i++)
+        TerminateBufferIO(buf_hdr, false, BM_VALID, true);
+
+
+Write tuple into buffer(RelationPutHeapTuple):
+
+a) Add the tuple to the page PageAddItem
+
+    PageAddItemExtended
+
+        1. Select offsetNumber to place the new item at
+            for (offsetNumber = FirstOffsetNumber;
+            	 offsetNumber < limit;	/* limit is maxoff+1 */
+            	 offsetNumber++)
+            {
+            	itemId = PageGetItemId(page, offsetNumber);
+
+        2. insert the item.
+
+            itemId = PageGetItemId(page, offsetNumber);
+            memcpy((char *) page + upper, item, size);
+
+            adjust page header
+	        phdr->pd_lower = (LocationIndex) lower;
+	        phdr->pd_upper = (LocationIndex) upper;
+
+
+b) Update tuple->t_self to the actual position where it was stored
+
+    ItemPointerSet(&(tuple->t_self), BufferGetBlockNumber(buffer), offnum);
+
+
+# Fork type
+
+```c
+/*
+ * Stuff for fork names.
+ *
+ * The physical storage of a relation consists of one or more forks.
+ * The main fork is always created, but in addition to that there can be
+ * additional forks for storing various metadata. ForkNumber is used when
+ * we need to refer to a specific fork in a relation.
+ */
+typedef enum ForkNumber
+{
+	InvalidForkNumber = -1,
+	MAIN_FORKNUM = 0,
+	FSM_FORKNUM,
+	VISIBILITYMAP_FORKNUM,
+	INIT_FORKNUM,
+	/*
+	 * NOTE: if you add a new fork, change MAX_FORKNUM and possibly
+	 * FORKNAMECHARS below, and update the forkNames array in
+	 * src/common/relpath.c
+	 */
+} ForkNumber;
+
+...
+	/*
+	 * for md.c; per-fork arrays of the number of open segments
+	 * (md_num_open_segs) and the segments themselves (md_seg_fds).
+	 */
+	int			md_num_open_segs[MAX_FORKNUM + 1];
+	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
+
+	/* if unowned, list link in list of all unowned SMgrRelations */
+	dlist_node	node;
+} SMgrRelationData;
+```
+
