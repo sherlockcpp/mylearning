@@ -287,3 +287,82 @@ typedef enum ForkNumber
 } SMgrRelationData;
 ```
 
+
+# Clog buffer
+
+TransactionIdCommitTree
+    TransactionIdSetTreeStatus
+
+
+a) Get the page from the xid
+
+    TransactionIdToPage(xid);
+        xid / (int64) CLOG_XACTS_PER_PAGE
+        = xid / (BLCKSZ * CLOG_XACTS_PER_BYTE);
+
+
+
+b) TransactionIdSetPageStatus
+
+    1. lock the XactSLRULock
+
+    2. TransactionIdSetPageStatusInternal
+
+        2.1 SimpleLruReadPage
+            SlruSelectLRUPage
+
+            2.1.1 See if page already has a buffer assigned
+
+                for (slotno = 0; slotno < shared->num_slots; slotno++)
+                    if (shared->page_number[slotno] == pageno &&
+                        shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+                        return return slotno;
+
+            2.1.2 If we find any EMPTY slot, just select that one. Else choose a
+                victim page to replace.
+            
+            2.1.3 Write the page if dirty, and try again.
+
+                SlruInternalWritePage(ctl, bestvalidslot, NULL);
+        
+        2.2 ok = SlruPhysicalReadPage(ctl, pageno, slotno);
+
+        2.3 Set the LSNs for this newly read-in page to zero.
+
+            SimpleLruZeroLSNs(ctl, slotno);
+
+        2.4 Set the subtransactions and main transaction
+
+            TransactionIdSetStatusBit
+
+
+```c
+
+	/*
+	 * Arrays holding info for each buffer slot.  Page number is undefined
+	 * when status is EMPTY, as is page_lru_count.
+	 */
+	char	  **page_buffer;
+...
+	/*
+	 * Optional array of WAL flush LSNs associated with entries in the SLRU
+	 * pages.  If not zero/NULL, we must flush WAL before writing pages (true
+	 * for pg_xact, false for multixact, pg_subtrans, pg_notify).  group_lsn[]
+	 * has lsn_groups_per_page entries per buffer slot, each containing the
+	 * highest LSN known for a contiguous group of SLRU entries on that slot's
+	 * page.
+	 */
+	XLogRecPtr *group_lsn;
+	int			lsn_groups_per_page;
+
+	/*----------
+	 * We mark a page "most recently used" by setting
+	 *		page_lru_count[slotno] = ++cur_lru_count;
+	 * The oldest page is therefore the one with the highest value of
+	 *		cur_lru_count - page_lru_count[slotno]
+	 * The counts will eventually wrap around, but this calculation still
+	 * works as long as no page's age exceeds INT_MAX counts.
+	 *----------
+	 */
+	int			cur_lru_count;
+```
