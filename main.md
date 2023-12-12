@@ -336,6 +336,16 @@ b) TransactionIdSetPageStatus
             TransactionIdSetStatusBit
 
 
+The usage of clog:
+
+Check if the transaction is committed or aborted, used mostly for tuple
+visibility:
+
+    TransactionIdDidCommit
+    TransactionIdDidAbort
+        TransactionIdGetStatus
+
+
 ```c
 
 	/*
