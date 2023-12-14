@@ -376,3 +376,44 @@ visibility:
 	 */
 	int			cur_lru_count;
 ```
+
+# Tuple format
+
+Note that only t_data will be written into the disk.
+
+    offnum = PageAddItem(pageHeader, (Item) tuple->t_data,
+    				 tuple->t_len, InvalidOffsetNumber, false, true);
+
+```c
+
+typedef struct HeapTupleData
+{
+	uint32		t_len;			/* length of *t_data */
+	ItemPointerData t_self;		/* SelfItemPointer */
+	Oid			t_tableOid;		/* table the tuple came from */
+	HeapTupleHeader t_data;		/* -> tuple header and data */
+} HeapTupleData;
+
+struct HeapTupleHeaderData
+{
+	union
+	{
+		HeapTupleFields t_heap;
+		DatumTupleFields t_datum;
+	}			t_choice;
+
+	ItemPointerData t_ctid;		/* current TID of this or newer tuple (or a
+								 * speculative insertion token) */
+
+	/* Fields below here must match MinimalTupleData! */
+
+	uint16		t_infomask2;	/* number of attributes + various flags */
+	uint16		t_infomask;		/* various flag bits, see below */
+	uint8		t_hoff;			/* sizeof header incl. bitmap, padding */
+
+	/* ^ - 23 bytes - ^ */
+	bits8		t_bits[FLEXIBLE_ARRAY_MEMBER];	/* bitmap of NULLs */
+
+	/* MORE DATA FOLLOWS AT END OF STRUCT */
+};
+```
