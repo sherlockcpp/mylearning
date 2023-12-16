@@ -417,3 +417,43 @@ struct HeapTupleHeaderData
 	/* MORE DATA FOLLOWS AT END OF STRUCT */
 };
 ```
+
+# VSM VM
+
+16384 - table's filenode
+
+16384_fsm - The free space map is stored in a file named with the filenode
+number
+
+16384_vm - to track which pages are known to have no dead tuples.
+
+# column store Hydra
+
+A meta table to record each data block which contains a chunk of data of the
+same column.
+
+Columnar storage functionality is dependent on several metadata tables that
+reside in the columnar schema. For example, the columnar.stripe table contains
+all stripes that are currently visible to our transaction, and this information
+will be used to read and locate stripes within our columnar table.
+
+The heap tables provide a consistent view of data in concurrent environments
+via Postgres’ multi-version model (MVCC). This means that each SQL statement
+sees a snapshot of data (a database version) as it was some time ago,
+regardless of the current state of the underlying data. You can imagine a
+situation when two concurrent transactions are active - A and B. If transaction
+A adds rows to the table, then the other transaction will not be able to see
+them because entries in columnar.stripe will not be visible to transaction B ,
+even though they are visible to transaction A.
+
+Each stripe contains up to 15 chunks (with each chunk contains up to 10,000
+rows), and the metadata for each chunk is stored in columnar.chunk . This table
+is used to filter chunks based on their min and max values. Each chunk column
+has entries in this table, so when executing a filter (a WHERE clause) these
+values are checked before reading the chunk based on min and max value.
+
+Hydra's columnar DELETE command uses the mask column inside each row_mask row
+to logically mark the rows that are deleted and hide them from future queries.
+
+https://blog.hydra.so/blog/2023-03-02-columnar-updates-and-deletes
+
