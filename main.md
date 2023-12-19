@@ -427,6 +427,31 @@ number
 
 16384_vm - to track which pages are known to have no dead tuples.
 
+	/*
+	 * Reset the next slot pointer. This encourages the use of low-numbered
+	 * pages, increasing the chances that a later vacuum can truncate the
+	 * relation.  We don't bother with a lock here, nor with marking the page
+	 * dirty if it wasn't already, since this is just a hint.
+	 */
+	((FSMPage) PageGetContents(page))->fp_next_slot = 0;
+
+For example, consider this tree:
+
+		   7
+	   7	   6
+	 5	 7	 6	 5
+	4 5 5 7 2 6 5 2
+				T
+
+Assume that the target node is the node indicated by the letter T, and we're
+searching for a node with value of 6 or higher. The search begins at T. At the
+first iteration, we move to the right, then to the parent, arriving at the
+rightmost 5. At the second iteration, we move to the right, wrapping around,
+then climb up, arriving at the 7 on the third level.  7 satisfies our search,
+so we descend down to the bottom, following the path of sevens.  This is in
+fact the first suitable page to the right of (allowing for wraparound) our
+start point.
+
 # column store Hydra
 
 A meta table to record each data block which contains a chunk of data of the
