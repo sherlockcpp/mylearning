@@ -482,3 +482,37 @@ to logically mark the rows that are deleted and hide them from future queries.
 
 https://blog.hydra.so/blog/2023-03-02-columnar-updates-and-deletes
 
+
+# WAL log insert
+
+Constructing a WAL record begins with a call to XLogBeginInsert, followed by a
+number of XLogRegister* calls. The registered data is collected in private
+working memory, and finally assembled into a chain of XLogRecData structs by a
+call to XLogRecordAssemble(). See access/transam/README for details.
+
+XLogInsertRecord
+
+1. Reserve the right amount of space from the WAL.
+
+    	ReserveXLogInsertLocation(rechdr->xl_tot_len, &StartPos, &EndPos,
+							  &rechdr->xl_prev);
+
+2. Copy the record to the reserved WAL space.
+
+		/*
+		 * All the record data, including the header, is now ready to be
+		 * inserted. Copy the record in the space reserved.
+		 */
+		CopyXLogRecordToWAL(rechdr->xl_tot_len, isLogSwitch, rdata,
+							StartPos, EndPos, insertTLI);
+
+
+                Get a pointer to the right place in the right WAL buffer to start inserting to.
+                
+                    currpos = GetXLogBuffer(CurrPos, tli);
+
+                     * If the page is not initialized yet, it is initialized. That might require
+                     * evicting an old dirty buffer from the buffer cache, which means I/O.
+
+                        AdvanceXLInsertBuffer(ptr, tli, false);
+                            XLogWrite(WriteRqst, tli, false);
