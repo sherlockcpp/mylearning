@@ -320,7 +320,7 @@ b) TransactionIdSetPageStatus
 
             2.1.2 If we find any EMPTY slot, just select that one. Else choose a
                 victim page to replace.
-            
+
             2.1.3 Write the page if dirty, and try again.
 
                 SlruInternalWritePage(ctl, bestvalidslot, NULL);
@@ -345,6 +345,56 @@ visibility:
     TransactionIdDidAbort
         TransactionIdGetStatus
 
+
+# Improve performance of subsystems on top of SLRU
+
+More precisely, what we do here is make the SLRU cache sizes
+configurable with new GUCs, so that sites with high concurrency and big
+ranges of transactions in flight (resp. multixacts/subtransactions) can
+benefit from bigger caches. In order for this to work with good
+performance, two additional changes are made:
+
+1. the cache is divided in "banks" (to borrow terminology from CPU
+caches), and algorithms such as eviction buffer search only affect
+one specific bank. This forestalls the problem that linear searching
+for a specific buffer across the whole cache takes too long: we only
+have to search the specific bank, whose size is small. This work is
+authored by Andrey Borodin.
+
+2. Change the locking regime for the SLRU banks, so that each bank uses
+a separate LWLock. This allows for increased scalability. This work
+is authored by Dilip Kumar. (A part of this was previously committed as
+d172b717c6f4.)
+
+Special care is taken so that the algorithms that can potentially
+traverse more than one bank release one bank's lock before acquiring the
+next. This should happen rarely, but particularly clog.c's group commit
+feature needed code adjustment to cope with this. I (Álvaro) also added
+lots of comments to make sure the design is sound.
+
+The new GUCs match the names introduced by bcdfa5f2e2f2 in the
+pg_stat_slru view.
+
+The default values for these parameters are similar to the previous
+sizes of each SLRU. commit_ts, clog and subtrans accept value 0, which
+means to adjust by dividing shared_buffers by 512 (so 2MB for every 1GB
+of shared_buffers), with a cap of 8MB. (A new slru.c function
+SimpleLruAutotuneBuffers() was added to support this.) The cap was
+previously 1MB for clog, so for sites with more than 512MB of shared
+memory the total memory used increases, which is likely a good tradeoff.
+However, other SLRUs (notably multixact ones) retain smaller sizes and
+don't support a configured value of 0. These values based on
+shared_buffers may need to be revisited, but that's an easy change.
+
+There was some resistance to adding these new GUCs: it would be better
+to adjust to memory pressure automatically somehow, for example by
+stealing memory from shared_buffers (where the caches can grow and
+shrink naturally). However, doing that seems to be a much larger
+project and one which has made virtually no progress in several years,
+and because this is such a pain point for so many users, here we take
+the pragmatic approach.
+
+TODO: how to write page into one bank.
 
 ```c
 
@@ -516,3 +566,12 @@ XLogInsertRecord
 
                         AdvanceXLInsertBuffer(ptr, tli, false);
                             XLogWrite(WriteRqst, tli, false);
+
+
+# Cache invalidation
+
+StartTransactionCommand -> StartTransaction -> AtStart_Cache -> AcceptInvalidationMessages -> ReceiveSharedInvalidMessages
+
+table_open -> LockRelationOid -> AcceptInvalidationMessages -> ReceiveSharedInvalidMessages
+
+
