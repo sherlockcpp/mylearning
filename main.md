@@ -394,7 +394,7 @@ project and one which has made virtually no progress in several years,
 and because this is such a pain point for so many users, here we take
 the pragmatic approach.
 
-TODO: how to write page into one bank.
+TODO: how to write page into one bank.git
 
 ```c
 
@@ -573,5 +573,86 @@ XLogInsertRecord
 StartTransactionCommand -> StartTransaction -> AtStart_Cache -> AcceptInvalidationMessages -> ReceiveSharedInvalidMessages
 
 table_open -> LockRelationOid -> AcceptInvalidationMessages -> ReceiveSharedInvalidMessages
+
+# TID
+
+TIDStore is a data structure designed to efficiently store large sets
+of TIDs. For TID storage, it employs a radix tree, where the key is
+a block number, and the value is a bitmap representing offset
+numbers. The TIDStore can be created on a DSA area and used by
+multiple backend processes simultaneously.
+
+There are potential future users such as tidbitmap.c, though it's very
+likely the interface will need to evolve as we come to understand the
+needs of different kinds of users. For example, we can support
+updating the offset bitmap of existing values.
+
+Currently, the TIDStore is not used for anything yet, aside from the
+test code. But an upcoming patch will use it.
+
+This includes a unit test module, in src/test/modules/test_tidstore.
+
+
+# speculative insert.
+
+table_tuple_insert_speculative
+    heapam_tuple_insert_speculative
+
+    HeapTupleHeaderSetSpeculativeToken(tuple->t_data, specToken);
+
+    Set t_ctid to SpecTokenOffsetNumber
+
+    options |= HEAP_INSERT_SPECULATIVE;
+
+# table am
+
+> One downside is that every block-based tableam is going to end up with
+> a very similar implementation, which is kind of something I don't like
+> about the tableam API in general: if you want to make something that
+> is basically heap plus a little bit of special sauce, you have to copy
+> a mountain of code. Right now we don't really care about that problem,
+> because we don't have any other tableams in core, but if we ever do, I
+> think we're going to find ourselves very unhappy with that aspect of
+> things. But maybe now is not the time to start worrying. That problem
+> isn't unique to analyze, and giving out-of-core tableams the
+> flexibility to do what they want is better than not.
+
+I think that can partially be addressed by having more "block oriented AM"
+helpers in core, like we have for table_block_parallelscan*. Doesn't work for
+everything, but should for something like analyze.
+
+
+# vacuum freeze
+
+advance relfrozenxid / relminmxid
+
+heap_page_prune_and_freeze
+    heap_freeze_prepared_tuples
+
+    	if (frz->frzflags & XLH_FREEZE_XVAC)
+		    HeapTupleHeaderSetXvac(tuple, FrozenTransactionId);
+                (tup)->t_choice.t_heap.t_field3.t_xvac = (xid); \
+
+	    if (frz->frzflags & XLH_INVALID_XVAC)
+	    	HeapTupleHeaderSetXvac(tuple, InvalidTransactionId);
+
+Use the following macro can check if the tuple is frozen or not.
+
+#define HeapTupleHeaderGetXmin(tup) \
+( \
+	HeapTupleHeaderXminFrozen(tup) ? \
+		FrozenTransactionId : HeapTupleHeaderGetRawXmin(tup) \
+)
+
+# get the xid that updated a tuple
+
+/*
+ * HeapTupleHeaderGetRawXmax gets you the raw Xmax field.  To find out the Xid
+ * that updated a tuple, you might need to resolve the MultiXactId if certain
+ * bits are set.  HeapTupleHeaderGetUpdateXid checks those bits and takes care
+ * to resolve the MultiXactId if necessary.  This might involve multixact I/O,
+ * so it should only be used if absolutely necessary.
+ */
+#define HeapTupleHeaderGetUpdateXid(tup) \
 
 
